@@ -1,0 +1,6 @@
+{
+  "name": "Voyara AI - AI Trip Planner",
+  "description": "Premium AI-powered travel planning platform with interactive itineraries, maps, budget management, and intelligent assistant.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

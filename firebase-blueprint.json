@@ -1,0 +1,42 @@
+{
+  "entities": {
+    "users": {
+      "title": "Users",
+      "description": "Registered user accounts and preferences",
+      "properties": {
+        "uid": { "type": "string", "description": "User Firebase Auth UID" },
+        "email": { "type": "string", "description": "User email address" },
+        "displayName": { "type": "string", "description": "Full name" },
+        "photoURL": { "type": "string", "description": "Avatar image URL" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "preferences": {
+          "type": "object",
+          "description": "Default travel preferences"
+        }
+      },
+      "required": ["uid", "email"]
+    },
+    "trips": {
+      "title": "Trips",
+      "description": "AI-generated and user-saved travel itineraries",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner UID" },
+        "destination": { "type": "string", "description": "Destination name" },
+        "destinationImage": { "type": "string", "description": "Cover photo URL" },
+        "startDate": { "type": "string", "description": "Trip start date" },
+        "endDate": { "type": "string", "description": "Trip end date" },
+        "duration": { "type": "number", "description": "Duration in days" },
+        "travelers": { "type": "number", "description": "Number of travelers" },
+        "budgetTier": { "type": "string", "enum": ["Budget", "Moderate", "Luxury"] },
+        "currency": { "type": "string" },
+        "estimatedBudget": { "type": "number" },
+        "travelStyles": { "type": "array", "items": { "type": "string" } },
+        "itinerary": { "type": "array", "description": "Day-by-day activities" },
+        "budgetBreakdown": { "type": "object", "description": "Cost categories" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "destination", "duration", "itinerary"]
+    }
+  }
+}
