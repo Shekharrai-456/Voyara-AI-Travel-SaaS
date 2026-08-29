@@ -17,14 +17,15 @@ export default function Navbar() {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setMounted(true);
+    const handle = requestAnimationFrame(() => setMounted(true));
+    return () => cancelAnimationFrame(handle);
   }, []);
 
   const navLinks = [
     { name: 'Explore', href: '/#explore' },
     { name: 'How It Works', href: '/#how-it-works' },
     { name: 'Features', href: '/#features' },
-    { name: 'My Trips', href: user ? '/dashboard' : '/login' },
+    { name: 'My Trips', href: user ? '/dashboard' : '/login?redirect=/dashboard&reason=dashboard' },
   ];
 
   return (
@@ -155,7 +156,7 @@ export default function Navbar() {
                 Sign In
               </Link>
               <Link
-                href="/create-trip"
+                href={user ? "/create-trip" : "/login?redirect=/create-trip&reason=plan"}
                 className="px-4 py-2 rounded-xl text-sm font-semibold bg-gradient-to-r from-indigo-600 via-violet-600 to-cyan-500 text-white shadow-md shadow-indigo-500/20 hover:shadow-lg hover:shadow-indigo-500/30 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center gap-1.5"
               >
                 <Sparkles className="w-4 h-4" />

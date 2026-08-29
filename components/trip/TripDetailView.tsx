@@ -12,8 +12,7 @@ import {
   MapPin, Calendar, Users, DollarSign, Share2, Trash2, RefreshCw, 
   Sparkles, Compass, Edit, PieChart, MessageSquare, ArrowLeft, Check
 } from 'lucide-react';
-import { db } from '@/lib/firebase';
-import { doc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { supabase } from '@/lib/supabase';
 
 interface TripDetailViewProps {
   initialTrip: TripData;
@@ -39,17 +38,21 @@ export default function TripDetailView({ initialTrip }: TripDetailViewProps) {
     };
 
     setTrip(newTrip);
+    localStorage.setItem(`trip_${trip.id}`, JSON.stringify(newTrip));
 
-    // Save update to Firestore if not demo
+    // Save update to Supabase if not demo
     if (!trip.id.startsWith('demo-')) {
       try {
-        await updateDoc(doc(db, 'trips', trip.id), {
-          itinerary: updatedItinerary,
-          estimatedBudget: newTrip.estimatedBudget,
-          updatedAt: newTrip.updatedAt,
-        });
+        await supabase
+          .from('trips')
+          .update({
+            itinerary: updatedItinerary,
+            estimated_budget: newTrip.estimatedBudget,
+            updated_at: newTrip.updatedAt,
+          })
+          .eq('id', trip.id);
       } catch (err) {
-        console.error('Failed to update trip in Firestore:', err);
+        console.error('Failed to update trip in Supabase:', err);
       }
     }
   };
@@ -59,10 +62,9 @@ export default function TripDetailView({ initialTrip }: TripDetailViewProps) {
     setIsDeleting(true);
     try {
       if (!trip.id.startsWith('demo-')) {
-        await deleteDoc(doc(db, 'trips', trip.id));
-      } else {
-        localStorage.removeItem(`trip_${trip.id}`);
+        await supabase.from('trips').delete().eq('id', trip.id);
       }
+      localStorage.removeItem(`trip_${trip.id}`);
       router.push('/dashboard');
     } catch (err) {
       console.error('Failed to delete trip:', err);
@@ -87,9 +89,18 @@ export default function TripDetailView({ initialTrip }: TripDetailViewProps) {
           userId: trip.userId,
         };
         setTrip(updated);
+        localStorage.setItem(`trip_${trip.id}`, JSON.stringify(updated));
 
         if (!trip.id.startsWith('demo-')) {
-          await updateDoc(doc(db, 'trips', trip.id), updated);
+          await supabase
+            .from('trips')
+            .update({
+              itinerary: updated.itinerary,
+              estimated_budget: updated.estimatedBudget,
+              budget_breakdown: updated.budgetBreakdown,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', trip.id);
         }
       }
     } catch (err) {

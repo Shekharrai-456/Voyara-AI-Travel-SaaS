@@ -10,8 +10,7 @@ import {
 } from 'lucide-react';
 import { TripPreferences, BudgetTier, TravelStyle, TripData } from '@/types/trip';
 import { useAuth } from '@/context/AuthContext';
-import { db } from '@/lib/firebase';
-import { collection, addDoc } from 'firebase/firestore';
+import { supabase } from '@/lib/supabase';
 import AIGenerationLoader from './AIGenerationLoader';
 
 const POPULAR_DESTINATIONS = [
@@ -77,6 +76,11 @@ export default function TripWizard() {
   };
 
   const handleGenerateTrip = async () => {
+    if (!user) {
+      router.push('/login?redirect=/create-trip&reason=plan');
+      return;
+    }
+
     setIsGenerating(true);
     setErrorMessage(null);
 
@@ -110,18 +114,41 @@ export default function TripWizard() {
 
       const generatedTripData: TripData = await res.json();
 
-      // Save to Firestore if user logged in
+      // Save to Supabase if user logged in
       let tripId = 'demo-' + Date.now();
       if (user) {
-        const tripRef = await addDoc(collection(db, 'trips'), {
-          ...generatedTripData,
-          userId: user.uid,
-        });
-        tripId = tripRef.id;
-      } else {
-        // Store transiently in localStorage
-        localStorage.setItem(`trip_${tripId}`, JSON.stringify(generatedTripData));
+        const newId = 'trip-' + Date.now();
+        const tripPayload = {
+          id: newId,
+          user_id: user.id,
+          destination: generatedTripData.destination,
+          destination_image: generatedTripData.destinationImage,
+          start_date: generatedTripData.startDate,
+          end_date: generatedTripData.endDate,
+          duration_days: generatedTripData.durationDays,
+          travelers: generatedTripData.travelers,
+          budget_tier: generatedTripData.budgetTier,
+          currency: generatedTripData.currency,
+          estimated_budget: generatedTripData.estimatedBudget,
+          travel_styles: generatedTripData.travelStyles,
+          status: generatedTripData.status || 'Upcoming',
+          destination_coordinates: generatedTripData.destinationCoordinates,
+          budget_breakdown: generatedTripData.budgetBreakdown,
+          itinerary: generatedTripData.itinerary,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        const { error } = await supabase.from('trips').insert([tripPayload]);
+        if (!error) {
+          tripId = newId;
+        } else {
+          console.warn('Supabase insert failed, caching locally:', error.message);
+        }
       }
+
+      // Store in localStorage for instant access & offline caching
+      localStorage.setItem(`trip_${tripId}`, JSON.stringify({ ...generatedTripData, id: tripId }));
 
       router.push(`/trips/${tripId}`);
     } catch (err: any) {

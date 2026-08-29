@@ -1,15 +1,22 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
-import { db } from '@/lib/firebase';
-import { doc, updateDoc } from 'firebase/firestore';
-import { User, Mail, Sun, Moon, Laptop, LogOut, Trash2, CheckCircle2 } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
+import { User, Mail, Sun, Moon, Laptop, LogOut, Trash2, CheckCircle2, Compass } from 'lucide-react';
 
 export default function ProfilePage() {
-  const { user, userProfile, logout, refreshProfile } = useAuth();
+  const { user, userProfile, loading, logout, refreshProfile } = useAuth();
   const { theme, setTheme } = useTheme();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push('/login?redirect=/profile');
+    }
+  }, [user, loading, router]);
 
   const [displayName, setDisplayName] = useState(() => userProfile?.displayName || '');
   const [favoriteDestinations, setFavoriteDestinations] = useState('Pokhara, Nepal, Kyoto, Japan');
@@ -20,10 +27,14 @@ export default function ProfilePage() {
     e.preventDefault();
     if (!user) return;
     try {
-      await updateDoc(doc(db, 'users', user.uid), {
-        displayName,
-        'preferences.favoriteDestinations': favoriteDestinations.split(',').map(s => s.trim()),
-        'preferences.defaultBudgetTier': defaultBudget,
+      await supabase.from('profiles').upsert({
+        id: user.id,
+        email: user.email,
+        display_name: displayName,
+        preferences: {
+          favoriteDestinations: favoriteDestinations.split(',').map(s => s.trim()),
+          defaultBudgetTier: defaultBudget,
+        },
       });
       await refreshProfile();
       setSaved(true);
@@ -32,6 +43,21 @@ export default function ProfilePage() {
       console.error('Error saving profile:', err);
     }
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-[70vh] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <Compass className="w-8 h-8 text-indigo-600 animate-spin" />
+          <p className="text-xs text-neutral-500 font-medium">Verifying sign-in status...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null;
+  }
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8 space-y-8">

@@ -24,12 +24,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   // Sync initial theme from localStorage or system preference on client mount
   useEffect(() => {
-    const saved = localStorage.getItem('voyara-theme') as Theme | null;
-    if (saved === 'light' || saved === 'dark' || saved === 'system') {
-      setThemeState(saved);
-    } else if (window.matchMedia && !window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      setThemeState('light');
-    }
+    const handle = requestAnimationFrame(() => {
+      const saved = localStorage.getItem('voyara-theme') as Theme | null;
+      if (saved === 'light' || saved === 'dark' || saved === 'system') {
+        setThemeState(saved);
+      } else if (window.matchMedia && !window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        setThemeState('light');
+      }
+    });
+    return () => cancelAnimationFrame(handle);
   }, []);
 
   // Sync DOM classes and isDark state whenever theme changes
@@ -51,8 +54,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       root.style.colorScheme = 'light';
     }
 
-    setIsDark(dark);
+    const handle = requestAnimationFrame(() => setIsDark(dark));
     localStorage.setItem('voyara-theme', theme);
+    return () => cancelAnimationFrame(handle);
   }, [theme]);
 
   // Dynamic system theme listener

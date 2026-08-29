@@ -8,7 +8,14 @@ const getGeminiClient = () => {
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY environment variable is missing");
   }
-  return new GoogleGenAI({ apiKey });
+  return new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
 };
 
 export async function POST(req: NextRequest) {
@@ -48,7 +55,7 @@ Requirements:
 6. Return purely valid JSON matching the schema without markdown wrappers or extra commentary.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
+      model: "gemini-3.7-flash",
       contents: systemPrompt,
       config: {
         responseMimeType: "application/json",

@@ -4,8 +4,10 @@ import React from 'react';
 import Link from 'next/link';
 import { motion } from 'motion/react';
 import { Sparkles, MapPin, ArrowRight, Compass, ShieldCheck, Sun, Users, DollarSign } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
 
 export default function Hero() {
+  const { user } = useAuth();
   return (
     <section className="relative overflow-hidden pt-12 pb-20 md:pt-20 md:pb-32 bg-[#FDFCFB] dark:bg-[#0B0A0F] transition-colors duration-300">
       {/* Background Subtle Gradient Blobs */}
@@ -52,7 +54,7 @@ export default function Hero() {
               className="pt-2 flex flex-wrap items-center gap-4"
             >
               <Link
-                href="/create-trip"
+                href={user ? "/create-trip" : "/login?redirect=/create-trip&reason=plan"}
                 className="px-7 py-3.5 rounded-2xl text-base font-semibold bg-gradient-to-r from-indigo-600 via-violet-600 to-cyan-500 text-white shadow-lg shadow-indigo-500/25 hover:shadow-indigo-500/40 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center gap-2"
               >
                 <Sparkles className="w-5 h-5" />

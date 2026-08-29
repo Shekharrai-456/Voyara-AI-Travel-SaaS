@@ -1,18 +1,38 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
-import { Compass, Sparkles, Mail, Lock, ArrowRight } from 'lucide-react';
+import { Compass, Sparkles, Mail, Lock, ArrowRight, CheckCircle2 } from 'lucide-react';
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { loginWithEmail, signInWithGoogle } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [infoNotice, setInfoNotice] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const handle = requestAnimationFrame(() => {
+      if (searchParams.get('registered') === 'true') {
+        setSuccess('Account created successfully! Please sign in with your email and password.');
+      }
+      const reason = searchParams.get('reason');
+      if (reason === 'plan') {
+        setInfoNotice('Please sign in to plan your AI trip and customize your itineraries.');
+      } else if (reason === 'dashboard') {
+        setInfoNotice('Please sign in to access your saved trips and dashboard.');
+      }
+    });
+    return () => cancelAnimationFrame(handle);
+  }, [searchParams]);
+
+  const redirectTarget = searchParams.get('redirect') || '/dashboard';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -20,7 +40,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await loginWithEmail(email, password);
-      router.push('/dashboard');
+      router.push(redirectTarget);
     } catch (err: any) {
       setError(err.message || 'Failed to sign in. Please check credentials.');
       setLoading(false);
@@ -31,7 +51,7 @@ export default function LoginPage() {
     setError('');
     try {
       await signInWithGoogle();
-      router.push('/dashboard');
+      router.push(redirectTarget);
     } catch (err: any) {
       if (err?.code !== 'auth/popup-closed-by-user' && !err?.message?.includes('popup-closed-by-user')) {
         setError(err.message || 'Google sign-in failed.');
@@ -53,6 +73,20 @@ export default function LoginPage() {
             Sign in to access your saved trips and personalized preferences.
           </p>
         </div>
+
+        {infoNotice && !success && (
+          <div className="p-3.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-900 text-indigo-700 dark:text-cyan-300 text-xs font-medium flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-indigo-500 shrink-0" />
+            <span>{infoNotice}</span>
+          </div>
+        )}
+
+        {success && (
+          <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 text-emerald-700 dark:text-emerald-300 text-xs font-medium flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{success}</span>
+          </div>
+        )}
 
         {error && (
           <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-600 dark:text-rose-300 text-xs font-medium">
@@ -138,5 +172,13 @@ export default function LoginPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-[80vh] flex items-center justify-center text-xs text-neutral-500">Loading...</div>}>
+      <LoginForm />
+    </Suspense>
   );
 }

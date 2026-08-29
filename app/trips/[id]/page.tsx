@@ -3,8 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { TripData } from '@/types/trip';
-import { db } from '@/lib/firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { supabase } from '@/lib/supabase';
 import TripDetailView from '@/components/trip/TripDetailView';
 import { Compass } from 'lucide-react';
 
@@ -139,18 +138,50 @@ export default function TripDetailPage() {
       }
 
       try {
-        const docRef = doc(db, 'trips', tripId);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          setTrip({ id: docSnap.id, ...docSnap.data() } as TripData);
-        } else {
-          // Check localStorage as fallback
-          const local = localStorage.getItem(`trip_${tripId}`);
-          setTrip(local ? JSON.parse(local) : DEFAULT_POKHARA_TRIP);
+        // Try localStorage first for instant load
+        const local = localStorage.getItem(`trip_${tripId}`);
+        if (local) {
+          try {
+            setTrip(JSON.parse(local));
+          } catch (e) {}
+        }
+
+        // Fetch from Supabase
+        const { data, error } = await supabase
+          .from('trips')
+          .select('*')
+          .eq('id', tripId)
+          .single();
+
+        if (data && !error) {
+          const tripData: TripData = {
+            id: data.id,
+            userId: data.user_id,
+            destination: data.destination,
+            destinationImage: data.destination_image,
+            startDate: data.start_date,
+            endDate: data.end_date,
+            durationDays: data.duration_days,
+            travelers: data.travelers,
+            budgetTier: data.budget_tier,
+            currency: data.currency,
+            estimatedBudget: Number(data.estimated_budget),
+            travelStyles: data.travel_styles || [],
+            status: data.status || 'Upcoming',
+            destinationCoordinates: data.destination_coordinates,
+            budgetBreakdown: data.budget_breakdown,
+            itinerary: data.itinerary || [],
+            createdAt: data.created_at,
+            updatedAt: data.updated_at,
+          };
+          setTrip(tripData);
+          localStorage.setItem(`trip_${tripId}`, JSON.stringify(tripData));
+        } else if (!local) {
+          setTrip(DEFAULT_POKHARA_TRIP);
         }
       } catch (err) {
-        console.error('Error fetching trip details:', err);
-        setTrip(DEFAULT_POKHARA_TRIP);
+        console.error('Error fetching trip details from Supabase:', err);
+        if (!trip) setTrip(DEFAULT_POKHARA_TRIP);
       } finally {
         setLoading(false);
       }
