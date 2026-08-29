@@ -22,20 +22,17 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = useState<Theme>('dark');
   const [isDark, setIsDark] = useState<boolean>(true);
 
-  // Sync theme from localStorage on client mount (post-hydration)
+  // Sync initial theme from localStorage or system preference on client mount
   useEffect(() => {
     const saved = localStorage.getItem('voyara-theme') as Theme | null;
-    if (saved) {
+    if (saved === 'light' || saved === 'dark' || saved === 'system') {
       setThemeState(saved);
-      if (saved === 'light') setIsDark(false);
-      else if (saved === 'dark') setIsDark(true);
-      else setIsDark(window.matchMedia('(prefers-color-scheme: dark)').matches);
     } else if (window.matchMedia && !window.matchMedia('(prefers-color-scheme: dark)').matches) {
       setThemeState('light');
-      setIsDark(false);
     }
   }, []);
 
+  // Sync DOM classes and isDark state whenever theme changes
   useEffect(() => {
     const root = document.documentElement;
     let dark = false;
@@ -48,26 +45,44 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
     if (dark) {
       root.classList.add('dark');
+      root.style.colorScheme = 'dark';
     } else {
       root.classList.remove('dark');
+      root.style.colorScheme = 'light';
     }
 
+    setIsDark(dark);
     localStorage.setItem('voyara-theme', theme);
   }, [theme]);
 
+  // Dynamic system theme listener
+  useEffect(() => {
+    if (theme !== 'system') return;
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleChange = (e: MediaQueryListEvent) => {
+      const root = document.documentElement;
+      if (e.matches) {
+        root.classList.add('dark');
+        root.style.colorScheme = 'dark';
+        setIsDark(true);
+      } else {
+        root.classList.remove('dark');
+        root.style.colorScheme = 'light';
+        setIsDark(false);
+      }
+    };
+
+    mediaQuery.addEventListener('change', handleChange);
+    return () => mediaQuery.removeEventListener('change', handleChange);
+  }, [theme]);
+
   const toggleTheme = () => {
-    const nextTheme = theme === 'dark' ? 'light' : 'dark';
-    setThemeState(nextTheme);
-    setIsDark(nextTheme === 'dark');
+    setThemeState((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
 
   const setTheme = (t: Theme) => {
     setThemeState(t);
-    if (t === 'light') setIsDark(false);
-    else if (t === 'dark') setIsDark(true);
-    else if (typeof window !== 'undefined') {
-      setIsDark(window.matchMedia('(prefers-color-scheme: dark)').matches);
-    }
   };
 
   return (
@@ -78,3 +93,4 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 }
 
 export const useTheme = () => useContext(ThemeContext);
+
