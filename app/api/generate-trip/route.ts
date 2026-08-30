@@ -1,160 +1,379 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { Type } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
-import { TripPreferences } from "@/types/trip";
+import { TripPreferences, TripData, DayItinerary, Activity, BudgetBreakdown } from "@/types/trip";
+import {
+  generateContentWithRetry,
+  GeminiAppError,
+  extractErrorStatus,
+  getFriendlyErrorMessageByStatus,
+  PRIMARY_GEMINI_MODEL,
+  FALLBACK_GEMINI_MODEL,
+} from "@/lib/gemini";
 
-// Initialize Gemini Client server-side only
-const getGeminiClient = () => {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY environment variable is missing");
+/**
+ * Validates and sanitizes incoming trip preferences
+ */
+function sanitizePreferences(raw: any): TripPreferences {
+  if (!raw || typeof raw !== "object") {
+    throw new GeminiAppError("Invalid request payload", 400, "Please provide valid trip preferences.");
   }
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
+
+  const destination = typeof raw.destination === "string" ? raw.destination.trim() : "";
+  if (!destination || destination.length < 2) {
+    throw new GeminiAppError("Destination is required", 400, "Please enter a valid destination.");
+  }
+
+  let durationDays = Number(raw.durationDays);
+  if (isNaN(durationDays) || durationDays < 1) {
+    durationDays = 3;
+  } else if (durationDays > 14) {
+    durationDays = 14; // Cap duration to prevent massive generation failures
+  }
+
+  let travelers = Number(raw.travelers);
+  if (isNaN(travelers) || travelers < 1) {
+    travelers = 1;
+  }
+
+  const startDate = typeof raw.startDate === "string" && raw.startDate ? raw.startDate : new Date().toISOString().split("T")[0];
+  const endDate = typeof raw.endDate === "string" && raw.endDate ? raw.endDate : startDate;
+  const budgetTier = ["Budget", "Moderate", "Luxury"].includes(raw.budgetTier) ? raw.budgetTier : "Moderate";
+  const currency = typeof raw.currency === "string" && raw.currency ? raw.currency.trim().toUpperCase() : "USD";
+  
+  const travelStyles = Array.isArray(raw.travelStyles)
+    ? raw.travelStyles.filter((s: any) => typeof s === "string" && s.trim().length > 0)
+    : ["Culture", "Food"];
+
+  const foodPreferences = Array.isArray(raw.foodPreferences)
+    ? raw.foodPreferences.filter((f: any) => typeof f === "string" && f.trim().length > 0)
+    : typeof raw.foodPreferences === "string"
+    ? raw.foodPreferences.split(",").map((s: string) => s.trim()).filter(Boolean)
+    : ["Local specialties"];
+
+  const accommodationType = typeof raw.accommodationType === "string" ? raw.accommodationType.trim() : "Comfortable Hotel";
+  const transportationMode = typeof raw.transportationMode === "string" ? raw.transportationMode.trim() : "Walking & Public Transit";
+  const activityIntensity = ["Paced", "Balanced", "Action-Packed"].includes(raw.activityIntensity)
+    ? raw.activityIntensity
+    : "Balanced";
+  const specialRequirements = typeof raw.specialRequirements === "string" ? raw.specialRequirements.trim() : "";
+
+  return {
+    destination,
+    startDate,
+    endDate,
+    durationDays,
+    travelers,
+    budgetTier,
+    currency,
+    travelStyles,
+    foodPreferences,
+    accommodationType,
+    transportationMode,
+    activityIntensity,
+    specialRequirements,
+  };
+}
+
+/**
+ * Builds the travel itinerary prompt for Gemini
+ */
+function buildItineraryPrompt(pref: TripPreferences): string {
+  const paceGuideline =
+    pref.activityIntensity === "Paced"
+      ? "2 to 3 well-spaced activities per day with ample relaxation and leisurely meals."
+      : pref.activityIntensity === "Action-Packed"
+      ? "4 to 5 energetic, varied activities per day covering top highlights and adventures."
+      : "3 to 4 balanced activities per day combining exploration, sights, and local downtime.";
+
+  return `You are Voyara AI, an expert destination planner and local travel specialist.
+Create an authentic, realistic, high-quality day-by-day travel itinerary for "${pref.destination}".
+
+Traveler Profile & Constraints:
+- Destination: ${pref.destination}
+- Dates: ${pref.startDate} to ${pref.endDate} (${pref.durationDays} full days)
+- Group Size: ${pref.travelers} traveler(s)
+- Budget Level: ${pref.budgetTier} in currency ${pref.currency}
+- Travel Interests / Styles: ${pref.travelStyles.join(", ")}
+- Food & Dining Preferences: ${pref.foodPreferences?.join(", ") || "Local specialties"}
+- Preferred Accommodation Style: ${pref.accommodationType || "Comfortable / Boutique"}
+- Preferred Transportation: ${pref.transportationMode || "Walking, Taxi & Local transit"}
+- Activity Pace: ${pref.activityIntensity} (${paceGuideline})
+- Special Notes / Requests: ${pref.specialRequirements || "None"}
+
+Planning Guidelines:
+1. Complete Schedule: Generate exactly ${pref.durationDays} days of itinerary (Day 1 to Day ${pref.durationDays}).
+2. Activity Structure: For each day, create realistic activities adhering to the "${pref.activityIntensity}" pace.
+3. Geographical Logic: Group activities logically by neighborhood/distance each day to minimize unnecessary transit time.
+4. Accurate Coordinates: Provide realistic latitude and longitude coordinates (lat, lng) within or immediately around ${pref.destination} for the destination and every single activity.
+5. Practical Costs: Ensure all estimated costs are realistic for the specified budget level (${pref.budgetTier}) and denominated in ${pref.currency}.
+6. Categories: Ensure activity categories are strictly one of: "Hotel", "Food", "Sightseeing", "Activity", "Transport", "Relaxation".
+7. Return strictly valid JSON adhering to the provided schema without markdown formatting or conversational prose.`;
+}
+
+/**
+ * Schema definition for structured JSON generation
+ */
+const ITINERARY_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    destination: { type: Type.STRING },
+    destinationCoordinates: {
+      type: Type.OBJECT,
+      properties: {
+        lat: { type: Type.NUMBER },
+        lng: { type: Type.NUMBER },
+      },
+      required: ["lat", "lng"],
+    },
+    durationDays: { type: Type.NUMBER },
+    estimatedBudget: { type: Type.NUMBER },
+    currency: { type: Type.STRING },
+    budgetBreakdown: {
+      type: Type.OBJECT,
+      properties: {
+        accommodation: { type: Type.NUMBER },
+        food: { type: Type.NUMBER },
+        transportation: { type: Type.NUMBER },
+        activities: { type: Type.NUMBER },
+        miscellaneous: { type: Type.NUMBER },
+        total: { type: Type.NUMBER },
+      },
+      required: ["accommodation", "food", "transportation", "activities", "miscellaneous", "total"],
+    },
+    itinerary: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          day: { type: Type.NUMBER },
+          title: { type: Type.STRING },
+          theme: { type: Type.STRING },
+          estimatedDayCost: { type: Type.NUMBER },
+          activities: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING },
+                time: { type: Type.STRING },
+                title: { type: Type.STRING },
+                description: { type: Type.STRING },
+                locationName: { type: Type.STRING },
+                category: {
+                  type: Type.STRING,
+                  enum: ["Hotel", "Food", "Sightseeing", "Activity", "Transport", "Relaxation"],
+                },
+                estimatedCost: { type: Type.NUMBER },
+                durationMinutes: { type: Type.NUMBER },
+                lat: { type: Type.NUMBER },
+                lng: { type: Type.NUMBER },
+                address: { type: Type.STRING },
+                rating: { type: Type.NUMBER },
+              },
+              required: ["id", "time", "title", "description", "locationName", "category", "estimatedCost", "lat", "lng"],
+            },
+          },
+        },
+        required: ["day", "title", "activities", "estimatedDayCost"],
       },
     },
-  });
+  },
+  required: [
+    "destination",
+    "destinationCoordinates",
+    "durationDays",
+    "estimatedBudget",
+    "currency",
+    "budgetBreakdown",
+    "itinerary",
+  ],
 };
+
+/**
+ * Validates and safely normalizes AI generated itinerary
+ */
+function validateAndNormalizeItinerary(aiData: any, preferences: TripPreferences): {
+  destinationCoordinates: { lat: number; lng: number };
+  estimatedBudget: number;
+  currency: string;
+  budgetBreakdown: BudgetBreakdown;
+  itinerary: DayItinerary[];
+} {
+  if (!aiData || typeof aiData !== "object") {
+    throw new GeminiAppError("AI response was not a valid object", 500, "Unable to parse the generated trip itinerary.");
+  }
+
+  // Destination coordinates fallback
+  const rawCoords = aiData.destinationCoordinates || {};
+  const lat = typeof rawCoords.lat === "number" && !isNaN(rawCoords.lat) ? rawCoords.lat : 27.7172;
+  const lng = typeof rawCoords.lng === "number" && !isNaN(rawCoords.lng) ? rawCoords.lng : 85.324;
+  const destinationCoordinates = { lat, lng };
+
+  const currency = typeof aiData.currency === "string" && aiData.currency ? aiData.currency : preferences.currency || "USD";
+
+  // Budget validation
+  const rawBreakdown = aiData.budgetBreakdown || {};
+  const accommodation = Number(rawBreakdown.accommodation) || 200;
+  const food = Number(rawBreakdown.food) || 150;
+  const transportation = Number(rawBreakdown.transportation) || 80;
+  const activities = Number(rawBreakdown.activities) || 120;
+  const miscellaneous = Number(rawBreakdown.miscellaneous) || 50;
+  const total = Number(rawBreakdown.total) || (accommodation + food + transportation + activities + miscellaneous);
+
+  const budgetBreakdown: BudgetBreakdown = {
+    accommodation,
+    food,
+    transportation,
+    activities,
+    miscellaneous,
+    total,
+  };
+
+  const estimatedBudget = Number(aiData.estimatedBudget) || total;
+
+  // Itinerary array validation
+  const rawItinerary = Array.isArray(aiData.itinerary) ? aiData.itinerary : [];
+  if (rawItinerary.length === 0) {
+    throw new GeminiAppError("AI generated an empty itinerary", 500, "The generated itinerary was incomplete. Please try again.");
+  }
+
+  const validCategories = ["Hotel", "Food", "Sightseeing", "Activity", "Transport", "Relaxation"] as const;
+
+  const normalizedItinerary: DayItinerary[] = rawItinerary.map((dayItem: any, index: number) => {
+    const dayNumber = Number(dayItem.day) || index + 1;
+    const dayTitle = typeof dayItem.title === "string" && dayItem.title ? dayItem.title : `Day ${dayNumber}: Exploration`;
+    const dayTheme = typeof dayItem.theme === "string" ? dayItem.theme : undefined;
+    const estimatedDayCost = Number(dayItem.estimatedDayCost) || Math.round(total / (rawItinerary.length || 1));
+
+    const rawActivities = Array.isArray(dayItem.activities) ? dayItem.activities : [];
+    const activities: Activity[] = rawActivities.map((act: any, actIdx: number) => {
+      const actId = typeof act.id === "string" && act.id ? act.id : `d${dayNumber}-a${actIdx + 1}`;
+      const time = typeof act.time === "string" && act.time ? act.time : "10:00 AM";
+      const title = typeof act.title === "string" && act.title ? act.title : "Sightseeing Experience";
+      const description = typeof act.description === "string" && act.description ? act.description : "Explore local highlights.";
+      const locationName = typeof act.locationName === "string" && act.locationName ? act.locationName : preferences.destination;
+      
+      let category: Activity["category"] = "Sightseeing";
+      if (validCategories.includes(act.category)) {
+        category = act.category;
+      }
+
+      const estimatedCost = typeof act.estimatedCost === "number" && !isNaN(act.estimatedCost) ? act.estimatedCost : 0;
+      const durationMinutes = typeof act.durationMinutes === "number" && !isNaN(act.durationMinutes) ? act.durationMinutes : 90;
+      
+      const actLat = typeof act.lat === "number" && !isNaN(act.lat) ? act.lat : lat + (Math.random() - 0.5) * 0.04;
+      const actLng = typeof act.lng === "number" && !isNaN(act.lng) ? act.lng : lng + (Math.random() - 0.5) * 0.04;
+
+      return {
+        id: actId,
+        time,
+        title,
+        description,
+        locationName,
+        category,
+        estimatedCost,
+        durationMinutes,
+        lat: actLat,
+        lng: actLng,
+        address: typeof act.address === "string" ? act.address : undefined,
+        rating: typeof act.rating === "number" ? act.rating : 4.5,
+      };
+    });
+
+    return {
+      day: dayNumber,
+      title: dayTitle,
+      theme: dayTheme,
+      estimatedDayCost,
+      activities,
+    };
+  });
+
+  return {
+    destinationCoordinates,
+    estimatedBudget,
+    currency,
+    budgetBreakdown,
+    itinerary: normalizedItinerary,
+  };
+}
 
 export async function POST(req: NextRequest) {
   try {
-    const preferences: TripPreferences = await req.json();
-
-    if (!preferences.destination || !preferences.durationDays) {
+    const rawBody = await req.json().catch(() => null);
+    if (!rawBody) {
       return NextResponse.json(
-        { error: "Destination and duration are required." },
+        { error: "Invalid JSON request body." },
         { status: 400 }
       );
     }
 
-    const ai = getGeminiClient();
+    // Step 1: Validate and sanitize preferences
+    const preferences = sanitizePreferences(rawBody);
 
-    const systemPrompt = `You are Voyara AI, an expert luxury & adventure travel itinerary planner.
-Create a detailed, highly realistic, custom day-by-day travel itinerary for a trip to "${preferences.destination}".
+    // Step 2: Build enhanced prompt
+    const prompt = buildItineraryPrompt(preferences);
 
-Trip Parameters:
-- Destination: ${preferences.destination}
-- Dates: ${preferences.startDate} to ${preferences.endDate} (${preferences.durationDays} days)
-- Travelers: ${preferences.travelers} person(s)
-- Budget Level: ${preferences.budgetTier}
-- Target Currency: ${preferences.currency || "USD"}
-- Travel Styles: ${preferences.travelStyles?.join(", ") || "General Sightseeing"}
-- Food Preferences: ${preferences.foodPreferences?.join(", ") || "Local Specialties"}
-- Accommodation Style: ${preferences.accommodationType || "Boutique / Comfortable"}
-- Activity Pace: ${preferences.activityIntensity || "Balanced"}
-- Special Requests: ${preferences.specialRequirements || "None"}
-
-Requirements:
-1. Provide exact day-by-day itineraries for all ${preferences.durationDays} days.
-2. For each day, include 3 to 5 realistic activities with time slots, descriptions, category, and cost.
-3. For EVERY activity, include realistic geographic coordinates (lat, lng) within or near ${preferences.destination}.
-4. Provide a total estimated budget and breakdown across Accommodation, Food, Transportation, Activities, and Miscellaneous.
-5. Provide overall destination coordinates (lat, lng).
-6. Return purely valid JSON matching the schema without markdown wrappers or extra commentary.`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.7-flash",
-      contents: systemPrompt,
+    // Step 3: Call Gemini with exponential backoff, jitter, and fallback model
+    const { response, modelUsed } = await generateContentWithRetry({
+      model: PRIMARY_GEMINI_MODEL,
+      fallbackModel: FALLBACK_GEMINI_MODEL,
+      contents: prompt,
       config: {
         responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            destination: { type: Type.STRING },
-            destinationCoordinates: {
-              type: Type.OBJECT,
-              properties: {
-                lat: { type: Type.NUMBER },
-                lng: { type: Type.NUMBER }
-              },
-              required: ["lat", "lng"]
-            },
-            durationDays: { type: Type.NUMBER },
-            estimatedBudget: { type: Type.NUMBER },
-            currency: { type: Type.STRING },
-            budgetBreakdown: {
-              type: Type.OBJECT,
-              properties: {
-                accommodation: { type: Type.NUMBER },
-                food: { type: Type.NUMBER },
-                transportation: { type: Type.NUMBER },
-                activities: { type: Type.NUMBER },
-                miscellaneous: { type: Type.NUMBER },
-                total: { type: Type.NUMBER }
-              },
-              required: ["accommodation", "food", "transportation", "activities", "miscellaneous", "total"]
-            },
-            itinerary: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  day: { type: Type.NUMBER },
-                  title: { type: Type.STRING },
-                  theme: { type: Type.STRING },
-                  estimatedDayCost: { type: Type.NUMBER },
-                  activities: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        id: { type: Type.STRING },
-                        time: { type: Type.STRING },
-                        title: { type: Type.STRING },
-                        description: { type: Type.STRING },
-                        locationName: { type: Type.STRING },
-                        category: { 
-                          type: Type.STRING,
-                          enum: ["Hotel", "Food", "Sightseeing", "Activity", "Transport", "Relaxation"]
-                        },
-                        estimatedCost: { type: Type.NUMBER },
-                        durationMinutes: { type: Type.NUMBER },
-                        lat: { type: Type.NUMBER },
-                        lng: { type: Type.NUMBER },
-                        address: { type: Type.STRING },
-                        rating: { type: Type.NUMBER }
-                      },
-                      required: ["id", "time", "title", "description", "locationName", "category", "estimatedCost", "lat", "lng"]
-                    }
-                  }
-                },
-                required: ["day", "title", "activities", "estimatedDayCost"]
-              }
-            }
-          },
-          required: ["destination", "destinationCoordinates", "durationDays", "estimatedBudget", "currency", "budgetBreakdown", "itinerary"]
-        }
-      }
+        responseSchema: ITINERARY_SCHEMA as any,
+        temperature: 0.7,
+      },
+      contextName: `Trip Generation for "${preferences.destination}"`,
     });
 
     const jsonText = response.text;
     if (!jsonText) {
-      throw new Error("No output generated from Gemini API");
+      throw new GeminiAppError("Empty response from AI model", 500, "AI planner returned an empty response. Please try again.");
     }
 
-    const parsedData = JSON.parse(jsonText);
+    let parsedData: any;
+    try {
+      parsedData = JSON.parse(jsonText);
+    } catch (parseErr) {
+      console.error("[Gemini] Failed to parse generated JSON:", parseErr, "Raw output:", jsonText);
+      throw new GeminiAppError("Malformed JSON from AI", 500, "The AI response format was invalid. Please try again.");
+    }
 
-    // Attach high quality unsplash destination photo URL based on destination name
-    const destinationQuery = encodeURIComponent(preferences.destination.toLowerCase());
+    // Step 4: Validate and normalize the output
+    const validatedItineraryData = validateAndNormalizeItinerary(parsedData, preferences);
+
+    // Cover image placeholder
     const coverImage = `https://images.unsplash.com/photo-1488646953014-85cb44e25828?auto=format&fit=crop&w=1200&q=80`;
 
-    const finalTripData = {
+    const finalTripData: TripData = {
+      id: `trip-${Date.now()}`,
+      userId: (rawBody as any).userId || "guest",
       ...preferences,
-      ...parsedData,
+      ...validatedItineraryData,
       destinationImage: coverImage,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      status: "Upcoming"
+      status: "Upcoming",
     };
 
+    console.log(`[Gemini] Itinerary generation complete using ${modelUsed} for "${preferences.destination}"`);
     return NextResponse.json(finalTripData);
   } catch (error: any) {
-    console.error("Error generating trip with Gemini:", error);
+    const { statusCode, statusText } = extractErrorStatus(error);
+    const friendlyMessage = error instanceof GeminiAppError && error.userMessage
+      ? error.userMessage
+      : getFriendlyErrorMessageByStatus(statusCode, statusText);
+
+    console.error(`[Gemini Route Error] Status: ${statusCode} (${statusText}) - Message: ${error?.message}`);
+
     return NextResponse.json(
-      { error: error.message || "Failed to generate AI trip itinerary." },
-      { status: 500 }
+      {
+        error: friendlyMessage,
+        code: statusText,
+        status: statusCode,
+      },
+      { status: statusCode }
     );
   }
 }

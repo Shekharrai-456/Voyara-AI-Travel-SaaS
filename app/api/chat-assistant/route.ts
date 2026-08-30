@@ -1,25 +1,25 @@
-import { GoogleGenAI } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
 import { TripData } from "@/types/trip";
-
-const getGeminiClient = () => {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY environment variable is missing");
-  }
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
-};
+import {
+  generateContentWithRetry,
+  GeminiAppError,
+  extractErrorStatus,
+  getFriendlyErrorMessageByStatus,
+  PRIMARY_GEMINI_MODEL,
+  FALLBACK_GEMINI_MODEL,
+} from "@/lib/gemini";
 
 export async function POST(req: NextRequest) {
   try {
-    const { message, currentTrip }: { message: string; currentTrip: TripData } = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body) {
+      return NextResponse.json(
+        { error: "Invalid JSON request." },
+        { status: 400 }
+      );
+    }
+
+    const { message, currentTrip }: { message: string; currentTrip: TripData } = body;
 
     if (!message || !currentTrip) {
       return NextResponse.json(
@@ -27,8 +27,6 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-
-    const ai = getGeminiClient();
 
     const prompt = `You are Voyara AI, an interactive travel concierge.
 The user is viewing their trip to "${currentTrip.destination}" (${currentTrip.durationDays} days, Budget: ${currentTrip.currency} ${currentTrip.estimatedBudget}).
@@ -48,26 +46,48 @@ Your Goal:
   "updatedBudget": optional_number_if_cost_changed
 }`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.7-flash",
+    const { response } = await generateContentWithRetry({
+      model: PRIMARY_GEMINI_MODEL,
+      fallbackModel: FALLBACK_GEMINI_MODEL,
       contents: prompt,
       config: {
-        responseMimeType: "application/json"
-      }
+        responseMimeType: "application/json",
+        temperature: 0.7,
+      },
+      contextName: "Travel Concierge Chat",
     });
 
     const text = response.text;
     if (!text) {
-      throw new Error("No response from AI Assistant");
+      throw new GeminiAppError("No response received from AI Assistant", 500);
     }
 
-    const data = JSON.parse(text);
+    let data: any;
+    try {
+      data = JSON.parse(text);
+    } catch (err) {
+      data = {
+        replyText: text.trim(),
+      };
+    }
+
     return NextResponse.json(data);
   } catch (error: any) {
-    console.error("AI Assistant error:", error);
+    const { statusCode, statusText } = extractErrorStatus(error);
+    const friendlyMessage =
+      error instanceof GeminiAppError && error.userMessage
+        ? error.userMessage
+        : getFriendlyErrorMessageByStatus(statusCode, statusText);
+
+    console.error(`[AI Assistant Error] Status: ${statusCode} (${statusText}) - Message: ${error?.message}`);
+
     return NextResponse.json(
-      { error: error.message || "Failed to process chat message." },
-      { status: 500 }
+      {
+        error: friendlyMessage,
+        code: statusText,
+        status: statusCode,
+      },
+      { status: statusCode }
     );
   }
 }

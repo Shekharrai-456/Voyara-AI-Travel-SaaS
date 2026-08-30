@@ -2,11 +2,11 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { 
-  MapPin, Calendar, Users, DollarSign, Sparkles, Compass, 
+  MapPin, Calendar, Users, DollarSign, Sparkles, 
   ArrowRight, ArrowLeft, Check, Utensils, Hotel, Car, Zap, 
-  Search, Info
+  AlertCircle, RefreshCw, X
 } from 'lucide-react';
 import { TripPreferences, BudgetTier, TravelStyle, TripData } from '@/types/trip';
 import { useAuth } from '@/context/AuthContext';
@@ -75,6 +75,8 @@ export default function TripWizard() {
   };
 
   const handleGenerateTrip = async () => {
+    if (isGenerating) return; // Prevent duplicate concurrent clicks
+
     if (!user) {
       router.push('/login?redirect=/create-trip&reason=plan');
       return;
@@ -84,19 +86,19 @@ export default function TripWizard() {
     setErrorMessage(null);
 
     const preferences: TripPreferences = {
-      destination,
+      destination: destination.trim(),
       startDate,
       endDate,
       durationDays: calculateDuration(),
-      travelers,
+      travelers: Math.max(1, travelers),
       budgetTier,
-      currency,
-      travelStyles: selectedStyles,
+      currency: currency.trim(),
+      travelStyles: selectedStyles.length > 0 ? selectedStyles : ['Culture', 'Food'],
       foodPreferences: foodPreferences.split(',').map(s => s.trim()).filter(Boolean),
-      accommodationType,
-      transportationMode,
+      accommodationType: accommodationType.trim(),
+      transportationMode: transportationMode.trim(),
       activityIntensity,
-      specialRequirements,
+      specialRequirements: specialRequirements.trim(),
     };
 
     try {
@@ -106,26 +108,32 @@ export default function TripWizard() {
         body: JSON.stringify(preferences),
       });
 
+      const responseData = await res.json().catch(() => null);
+
       if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || 'Failed to generate trip');
+        const errorMsg = responseData?.error || 'Our AI travel planner is temporarily unavailable. Please try again in a few moments.';
+        throw new Error(errorMsg);
       }
 
-      const generatedTripData: TripData = await res.json();
+      if (!responseData || !responseData.itinerary) {
+        throw new Error('Received incomplete trip data. Please try again.');
+      }
+
+      const generatedTripData: TripData = responseData;
 
       // Save to MongoDB via API if user logged in
       let tripId = 'demo-' + Date.now();
       if (user) {
         const newId = 'trip-' + Date.now();
         try {
-          const res = await fetch('/api/trips', {
+          const saveRes = await fetch('/api/trips', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ...generatedTripData, id: newId }),
           });
-          const data = await res.json();
-          if (res.ok && data.trip) {
-            tripId = data.trip.id;
+          const saveJson = await saveRes.json();
+          if (saveRes.ok && saveJson.trip) {
+            tripId = saveJson.trip.id;
           }
         } catch (apiErr) {
           console.warn('MongoDB API insert failed, caching locally:', apiErr);
@@ -138,7 +146,7 @@ export default function TripWizard() {
       router.push(`/trips/${tripId}`);
     } catch (err: any) {
       console.error('Trip generation error:', err);
-      setErrorMessage(err.message || 'An unexpected error occurred while generating the trip.');
+      setErrorMessage(err.message || 'Our AI travel planner is temporarily busy. Your preferences are saved.');
       setIsGenerating(false);
     }
   };
@@ -168,10 +176,49 @@ export default function TripWizard() {
         </div>
       </div>
 
+      {/* Friendly Error UI on failure */}
       {errorMessage && (
-        <div className="mb-6 p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-sm flex items-center justify-between">
-          <span>{errorMessage}</span>
-          <button onClick={() => setErrorMessage(null)} className="font-bold underline text-xs">Dismiss</button>
+        <div className="mb-6 p-4 sm:p-5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 text-amber-900 dark:text-amber-200 text-sm shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-bold text-base text-amber-950 dark:text-amber-100">
+                  Unable to generate your itinerary
+                </p>
+                <p className="text-xs sm:text-sm text-amber-800 dark:text-amber-300">
+                  {errorMessage}
+                </p>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400 pt-1">
+                  Your travel preferences have been saved below.
+                </p>
+              </div>
+            </div>
+            <button 
+              onClick={() => setErrorMessage(null)} 
+              className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 p-1"
+              aria-label="Dismiss"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-amber-200/60 dark:border-amber-900/40 flex items-center gap-3">
+            <button
+              onClick={handleGenerateTrip}
+              disabled={isGenerating}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs shadow-sm transition-all"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Try Again
+            </button>
+            <button
+              onClick={() => setErrorMessage(null)}
+              className="px-3 py-2 text-xs font-semibold text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white"
+            >
+              Edit Preferences
+            </button>
+          </div>
         </div>
       )}
 
@@ -445,7 +492,7 @@ export default function TripWizard() {
               >
                 <option value="Paced">Paced (Relaxed, 2-3 activities/day)</option>
                 <option value="Balanced">Balanced (Standard, 3-4 activities/day)</option>
-                <option value="Action-Packed">Action-Packed (High energy, 5+ activities/day)</option>
+                <option value="Action-Packed">Action-Packed (High energy, 4-5 activities/day)</option>
               </select>
             </div>
           </div>
@@ -469,8 +516,12 @@ export default function TripWizard() {
       <div className="mt-8 pt-6 border-t border-neutral-200/80 dark:border-neutral-800 flex items-center justify-between">
         {step > 1 ? (
           <button
-            onClick={() => setStep(step - 1)}
-            className="px-5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-800 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-sm font-semibold flex items-center gap-1.5"
+            onClick={() => {
+              setErrorMessage(null);
+              setStep(step - 1);
+            }}
+            disabled={isGenerating}
+            className="px-5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-800 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-sm font-semibold flex items-center gap-1.5 disabled:opacity-50"
           >
             <ArrowLeft className="w-4 h-4" /> Back
           </button>
@@ -478,8 +529,11 @@ export default function TripWizard() {
 
         {step < 4 ? (
           <button
-            onClick={() => setStep(step + 1)}
-            disabled={!destination.trim()}
+            onClick={() => {
+              setErrorMessage(null);
+              setStep(step + 1);
+            }}
+            disabled={!destination.trim() || isGenerating}
             className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold flex items-center gap-1.5 shadow-md disabled:opacity-50"
           >
             Continue <ArrowRight className="w-4 h-4" />
@@ -487,10 +541,11 @@ export default function TripWizard() {
         ) : (
           <button
             onClick={handleGenerateTrip}
-            className="px-8 py-3 rounded-2xl bg-gradient-to-r from-indigo-600 via-violet-600 to-cyan-500 text-white font-bold text-base flex items-center gap-2 shadow-xl shadow-indigo-500/25 hover:scale-[1.02] active:scale-[0.98] transition-all"
+            disabled={isGenerating}
+            className="px-8 py-3 rounded-2xl bg-gradient-to-r from-indigo-600 via-violet-600 to-cyan-500 text-white font-bold text-base flex items-center gap-2 shadow-xl shadow-indigo-500/25 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-60 disabled:cursor-not-allowed"
           >
             <Sparkles className="w-5 h-5 animate-pulse" />
-            Generate My AI Trip
+            {isGenerating ? 'Planning Your Journey...' : 'Generate My AI Trip'}
           </button>
         )}
       </div>

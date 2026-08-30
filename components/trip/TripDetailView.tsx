@@ -80,10 +80,15 @@ export default function TripDetailView({ initialTrip }: TripDetailViewProps) {
         body: JSON.stringify(trip),
       });
 
-      if (res.ok) {
-        const newData = await res.json();
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        throw new Error(data?.error || 'Unable to regenerate itinerary at this moment.');
+      }
+
+      if (data) {
         const updated = {
-          ...newData,
+          ...data,
           id: trip.id,
           userId: trip.userId,
         };
@@ -102,8 +107,9 @@ export default function TripDetailView({ initialTrip }: TripDetailViewProps) {
           });
         }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error regenerating:', err);
+      alert(err.message || 'Our AI travel planner is temporarily busy. Please try again shortly.');
     } finally {
       setIsRegenerating(false);
     }
