@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { TripData } from '@/types/trip';
-import { supabase } from '@/lib/supabase';
 import TripsGrid from '@/components/dashboard/TripsGrid';
 import { Plus, MapPin, Calendar, Users, DollarSign, ArrowRight, Sparkles, Compass } from 'lucide-react';
 
@@ -194,41 +193,21 @@ export default function DashboardPage() {
 
       if (user) {
         try {
-          const { data, error } = await supabase
-            .from('trips')
-            .select('*')
-            .eq('user_id', user.id);
+          const res = await fetch('/api/trips');
+          if (res.ok) {
+            const data = await res.json();
+            if (data.trips && data.trips.length > 0) {
+              const remoteTrips: TripData[] = data.trips;
 
-          if (data && !error && data.length > 0) {
-            const remoteTrips: TripData[] = data.map((d) => ({
-              id: d.id,
-              userId: d.user_id,
-              destination: d.destination,
-              destinationImage: d.destination_image,
-              startDate: d.start_date,
-              endDate: d.end_date,
-              durationDays: d.duration_days,
-              travelers: d.travelers,
-              budgetTier: d.budget_tier,
-              currency: d.currency,
-              estimatedBudget: Number(d.estimated_budget),
-              travelStyles: d.travel_styles || [],
-              status: d.status || 'Upcoming',
-              destinationCoordinates: d.destination_coordinates,
-              budgetBreakdown: d.budget_breakdown,
-              itinerary: d.itinerary || [],
-              createdAt: d.created_at,
-              updatedAt: d.updated_at,
-            }));
-
-            // Merge with local trips without duplicates
-            const combinedMap = new Map<string, TripData>();
-            loadedTrips.forEach((t) => combinedMap.set(t.id, t));
-            remoteTrips.forEach((t) => combinedMap.set(t.id, t));
-            loadedTrips = Array.from(combinedMap.values());
+              // Merge with local trips without duplicates
+              const combinedMap = new Map<string, TripData>();
+              loadedTrips.forEach((t) => combinedMap.set(t.id, t));
+              remoteTrips.forEach((t) => combinedMap.set(t.id, t));
+              loadedTrips = Array.from(combinedMap.values());
+            }
           }
         } catch (err) {
-          console.error('Error fetching trips from Supabase:', err);
+          console.error('Error fetching trips from API:', err);
         }
       }
 
@@ -243,7 +222,7 @@ export default function DashboardPage() {
     if (!confirm('Are you sure you want to delete this trip?')) return;
     try {
       if (user && !id.startsWith('demo-')) {
-        await supabase.from('trips').delete().eq('id', id);
+        await fetch(`/api/trips/${id}`, { method: 'DELETE' });
       }
       localStorage.removeItem(`trip_${id}`);
       setTrips((prev) => prev.filter((t) => t.id !== id));

@@ -1,12 +1,15 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
 import { UserProfile } from '@/types/trip';
-import { User } from '@supabase/supabase-js';
+
+export interface AppUser {
+  id: string;
+  email: string;
+}
 
 interface AuthContextType {
-  user: User | null;
+  user: AppUser | null;
   userProfile: UserProfile | null;
   loading: boolean;
   signInWithGoogle: () => Promise<void>;
@@ -30,199 +33,150 @@ const AuthContext = createContext<AuthContextType>({
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AppUser | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
-  const fetchUserProfile = async (currentUser: User) => {
+  const fetchCurrentUser = async () => {
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', currentUser.id)
-        .single();
-
-      if (data && !error) {
+      const res = await fetch('/api/auth/me');
+      const data = await res.json();
+      if (data.user) {
+        setUser({ id: data.user.uid, email: data.user.email });
         setUserProfile({
-          uid: data.id,
-          email: data.email || currentUser.email || '',
-          displayName: data.display_name || currentUser.user_metadata?.full_name || 'Traveler',
-          photoURL: data.photo_url || currentUser.user_metadata?.avatar_url || '',
-          createdAt: data.created_at || new Date().toISOString(),
+          uid: data.user.uid,
+          email: data.user.email,
+          displayName: data.user.displayName,
+          photoURL: data.user.photoURL,
+          createdAt: data.user.createdAt,
+          preferences: data.user.preferences,
         });
       } else {
-        // Fallback / Initial Profile creation
-        const newProfile: UserProfile = {
-          uid: currentUser.id,
-          email: currentUser.email || '',
-          displayName: currentUser.user_metadata?.full_name || currentUser.email?.split('@')[0] || 'Traveler',
-          photoURL: currentUser.user_metadata?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(currentUser.email || 'traveler')}`,
-          createdAt: new Date().toISOString(),
-        };
-
-        // Attempt upsert to Supabase
-        try {
-          await supabase.from('profiles').upsert({
-            id: currentUser.id,
-            email: newProfile.email,
-            display_name: newProfile.displayName,
-            photo_url: newProfile.photoURL,
-            created_at: newProfile.createdAt,
-          });
-        } catch (e) {}
-
-        setUserProfile(newProfile);
+        setUser(null);
+        setUserProfile(null);
       }
     } catch (err) {
-      console.error('Error fetching Supabase user profile:', err);
-      // Fallback local profile
-      setUserProfile({
-        uid: currentUser.id,
-        email: currentUser.email || '',
-        displayName: currentUser.user_metadata?.full_name || 'Traveler',
-        photoURL: currentUser.user_metadata?.avatar_url || '',
-        createdAt: new Date().toISOString(),
-      });
+      console.error('Failed to fetch session:', err);
+      setUser(null);
+      setUserProfile(null);
+    } finally {
+      setLoading(false);
     }
   };
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      const currentUser = session?.user ?? null;
-      setUser(currentUser);
-      if (currentUser) {
-        fetchUserProfile(currentUser);
+    let ignore = false;
+    async function loadSession() {
+      try {
+        const res = await fetch('/api/auth/me');
+        const data = await res.json();
+        if (!ignore) {
+          if (data.user) {
+            setUser({ id: data.user.uid, email: data.user.email });
+            setUserProfile({
+              uid: data.user.uid,
+              email: data.user.email,
+              displayName: data.user.displayName,
+              photoURL: data.user.photoURL,
+              createdAt: data.user.createdAt,
+              preferences: data.user.preferences,
+            });
+          } else {
+            setUser(null);
+            setUserProfile(null);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch session:', err);
+        if (!ignore) {
+          setUser(null);
+          setUserProfile(null);
+        }
+      } finally {
+        if (!ignore) {
+          setLoading(false);
+        }
       }
-      setLoading(false);
-    });
-
-    // Listen for auth state changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      const currentUser = session?.user ?? null;
-      setUser(currentUser);
-      if (currentUser) {
-        await fetchUserProfile(currentUser);
-      } else {
-        setUserProfile(null);
-      }
-      setLoading(false);
-    });
-
+    }
+    loadSession();
     return () => {
-      subscription.unsubscribe();
+      ignore = true;
     };
   }, []);
 
-  const signInWithGoogle = async () => {
-    try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/dashboard` : undefined,
-        },
-      });
-      if (error) throw error;
-    } catch (error: any) {
-      console.error('Error signing in with Google via Supabase:', error);
-      throw error;
-    }
-  };
-
   const loginWithEmail = async (email: string, pass: string) => {
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password: pass,
-      });
-      if (error) {
-        if (error.message?.toLowerCase().includes('email not confirmed')) {
-          throw new Error("Email not confirmed. Please check your inbox for the verification link, or turn off 'Confirm email' in your Supabase Dashboard -> Auth -> Providers -> Email settings for instant testing.");
-        }
-        throw error;
-      }
-      if (data.user) {
-        await fetchUserProfile(data.user);
-      }
-    } catch (error: any) {
-      console.error('Supabase Login failed:', error);
-      throw error;
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: pass }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to sign in');
     }
+
+    setUser({ id: data.user.uid, email: data.user.email });
+    setUserProfile({
+      uid: data.user.uid,
+      email: data.user.email,
+      displayName: data.user.displayName,
+      photoURL: data.user.photoURL,
+      createdAt: data.user.createdAt,
+      preferences: data.user.preferences,
+    });
   };
 
   const signUpWithEmail = async (email: string, pass: string, name: string) => {
-    try {
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password: pass,
-        options: {
-          data: { full_name: name },
-        },
-      });
-      if (error) throw error;
-      if (data.user) {
-        const newProfile: UserProfile = {
-          uid: data.user.id,
-          email,
-          displayName: name,
-          photoURL: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`,
-          createdAt: new Date().toISOString(),
-        };
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: pass, name }),
+    });
 
-        try {
-          await supabase.from('profiles').upsert({
-            id: data.user.id,
-            email,
-            display_name: name,
-            photo_url: newProfile.photoURL,
-          });
-        } catch (e) {}
-
-        // Ensure user is signed out after registration so they are directed to Sign In page
-        await supabase.auth.signOut();
-        setUser(null);
-        setUserProfile(null);
-
-        // If email confirmation is required by Supabase project settings
-        if (!data.session) {
-          throw new Error("Account created! Please check your email inbox to confirm your account before logging in.");
-        }
-      }
-    } catch (error: any) {
-      console.error('Supabase Signup failed:', error);
-      throw error;
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to register');
     }
+
+    // Clear session so user logs in on Sign In page
+    await fetch('/api/auth/logout', { method: 'POST' });
+    setUser(null);
+    setUserProfile(null);
+  };
+
+  const signInWithGoogle = async () => {
+    throw new Error('Google OAuth is disabled. Please sign in with email & password.');
   };
 
   const logout = async () => {
-    await supabase.auth.signOut();
+    await fetch('/api/auth/logout', { method: 'POST' });
     setUser(null);
     setUserProfile(null);
   };
 
   const resetPassword = async (email: string) => {
-    const { error } = await supabase.auth.resetPasswordForEmail(email);
-    if (error) throw error;
+    throw new Error('Password reset is not enabled for local JWT authentication.');
   };
 
   const refreshProfile = async () => {
-    if (user) {
-      await fetchUserProfile(user);
-    }
+    await fetchCurrentUser();
   };
 
   return (
-    <AuthContext.Provider value={{
-      user,
-      userProfile,
-      loading,
-      signInWithGoogle,
-      loginWithEmail,
-      signUpWithEmail,
-      logout,
-      resetPassword,
-      refreshProfile,
-    }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        userProfile,
+        loading,
+        signInWithGoogle,
+        loginWithEmail,
+        signUpWithEmail,
+        logout,
+        resetPassword,
+        refreshProfile,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

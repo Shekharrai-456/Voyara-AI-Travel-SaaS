@@ -4,7 +4,6 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
-import { supabase } from '@/lib/supabase';
 import { User, Mail, Sun, Moon, Laptop, LogOut, Trash2, CheckCircle2, Compass } from 'lucide-react';
 
 export default function ProfilePage() {
@@ -27,14 +26,16 @@ export default function ProfilePage() {
     e.preventDefault();
     if (!user) return;
     try {
-      await supabase.from('profiles').upsert({
-        id: user.id,
-        email: user.email,
-        display_name: displayName,
-        preferences: {
-          favoriteDestinations: favoriteDestinations.split(',').map(s => s.trim()),
-          defaultBudgetTier: defaultBudget,
-        },
+      await fetch('/api/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          displayName,
+          preferences: {
+            favoriteDestinations: favoriteDestinations.split(',').map(s => s.trim()),
+            defaultBudgetTier: defaultBudget,
+          },
+        }),
       });
       await refreshProfile();
       setSaved(true);

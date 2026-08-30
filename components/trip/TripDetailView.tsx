@@ -12,7 +12,6 @@ import {
   MapPin, Calendar, Users, DollarSign, Share2, Trash2, RefreshCw, 
   Sparkles, Compass, Edit, PieChart, MessageSquare, ArrowLeft, Check
 } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
 
 interface TripDetailViewProps {
   initialTrip: TripData;
@@ -40,19 +39,19 @@ export default function TripDetailView({ initialTrip }: TripDetailViewProps) {
     setTrip(newTrip);
     localStorage.setItem(`trip_${trip.id}`, JSON.stringify(newTrip));
 
-    // Save update to Supabase if not demo
+    // Save update to API if not demo
     if (!trip.id.startsWith('demo-')) {
       try {
-        await supabase
-          .from('trips')
-          .update({
+        await fetch(`/api/trips/${trip.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
             itinerary: updatedItinerary,
-            estimated_budget: newTrip.estimatedBudget,
-            updated_at: newTrip.updatedAt,
-          })
-          .eq('id', trip.id);
+            estimatedBudget: newTrip.estimatedBudget,
+          }),
+        });
       } catch (err) {
-        console.error('Failed to update trip in Supabase:', err);
+        console.error('Failed to update trip via API:', err);
       }
     }
   };
@@ -62,7 +61,7 @@ export default function TripDetailView({ initialTrip }: TripDetailViewProps) {
     setIsDeleting(true);
     try {
       if (!trip.id.startsWith('demo-')) {
-        await supabase.from('trips').delete().eq('id', trip.id);
+        await fetch(`/api/trips/${trip.id}`, { method: 'DELETE' });
       }
       localStorage.removeItem(`trip_${trip.id}`);
       router.push('/dashboard');
@@ -92,15 +91,15 @@ export default function TripDetailView({ initialTrip }: TripDetailViewProps) {
         localStorage.setItem(`trip_${trip.id}`, JSON.stringify(updated));
 
         if (!trip.id.startsWith('demo-')) {
-          await supabase
-            .from('trips')
-            .update({
+          await fetch(`/api/trips/${trip.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
               itinerary: updated.itinerary,
-              estimated_budget: updated.estimatedBudget,
-              budget_breakdown: updated.budgetBreakdown,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', trip.id);
+              estimatedBudget: updated.estimatedBudget,
+              budgetBreakdown: updated.budgetBreakdown,
+            }),
+          });
         }
       }
     } catch (err) {

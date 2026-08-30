@@ -8,7 +8,7 @@ import { Compass, Mail, Lock, User, ArrowRight } from 'lucide-react';
 
 export default function RegisterPage() {
   const router = useRouter();
-  const { signUpWithEmail, signInWithGoogle } = useAuth();
+  const { signUpWithEmail } = useAuth();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');

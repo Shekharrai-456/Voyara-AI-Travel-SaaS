@@ -10,7 +10,6 @@ import {
 } from 'lucide-react';
 import { TripPreferences, BudgetTier, TravelStyle, TripData } from '@/types/trip';
 import { useAuth } from '@/context/AuthContext';
-import { supabase } from '@/lib/supabase';
 import AIGenerationLoader from './AIGenerationLoader';
 
 const POPULAR_DESTINATIONS = [
@@ -114,36 +113,22 @@ export default function TripWizard() {
 
       const generatedTripData: TripData = await res.json();
 
-      // Save to Supabase if user logged in
+      // Save to MongoDB via API if user logged in
       let tripId = 'demo-' + Date.now();
       if (user) {
         const newId = 'trip-' + Date.now();
-        const tripPayload = {
-          id: newId,
-          user_id: user.id,
-          destination: generatedTripData.destination,
-          destination_image: generatedTripData.destinationImage,
-          start_date: generatedTripData.startDate,
-          end_date: generatedTripData.endDate,
-          duration_days: generatedTripData.durationDays,
-          travelers: generatedTripData.travelers,
-          budget_tier: generatedTripData.budgetTier,
-          currency: generatedTripData.currency,
-          estimated_budget: generatedTripData.estimatedBudget,
-          travel_styles: generatedTripData.travelStyles,
-          status: generatedTripData.status || 'Upcoming',
-          destination_coordinates: generatedTripData.destinationCoordinates,
-          budget_breakdown: generatedTripData.budgetBreakdown,
-          itinerary: generatedTripData.itinerary,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        };
-
-        const { error } = await supabase.from('trips').insert([tripPayload]);
-        if (!error) {
-          tripId = newId;
-        } else {
-          console.warn('Supabase insert failed, caching locally:', error.message);
+        try {
+          const res = await fetch('/api/trips', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...generatedTripData, id: newId }),
+          });
+          const data = await res.json();
+          if (res.ok && data.trip) {
+            tripId = data.trip.id;
+          }
+        } catch (apiErr) {
+          console.warn('MongoDB API insert failed, caching locally:', apiErr);
         }
       }
 
